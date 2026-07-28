@@ -35,6 +35,26 @@ def calculate_green_score(total_bytes, co2_per_visit_g):
     green_score = round((performance_score * 0.5) + (carbon_score * 0.5))
     return green_score, round(performance_score), round(carbon_score)
 
+def get_or_create_website(cursor, url):
+    cursor.execute("SELECT website_id FROM websites WHERE url = %s", (url,))
+    row = cursor.fetchone()
+    if row:
+        return row[0]
+    cursor.execute("INSERT INTO websites (url, owner) VALUES (%s, %s)", (url, "unknown"))
+    return cursor.lastrowid
+
+def save_scan(website_id, green_score, carbon_score):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    site_id = website_id
+    cursor.execute(
+        "INSERT INTO scan_history (website_id, green_score, carbon_score) VALUES (%s, %s, %s)",
+        (site_id, green_score, carbon_score)
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
+
 @app.route('/api/ping')
 def ping():
     return jsonify({"status": "ok", "message": "BytePrune backend is running"})
@@ -87,6 +107,19 @@ def analyze():
     co2_per_visit_g, co2_monthly_kg = calculate_co2(total_bytes)
     green_score, performance_score, carbon_score = calculate_green_score(total_bytes, co2_per_visit_g)
 
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        website_id = get_or_create_website(cursor, url)
+        conn.commit()
+        cursor.close()
+        conn.close()
+        save_scan(website_id, green_score, carbon_score)
+        saved = True
+    except Exception as e:
+        saved = False
+        print(f"DB save error: {e}")
+
     return jsonify({
         "url": url,
         "total_page_size_bytes": total_bytes,
@@ -97,7 +130,8 @@ def analyze():
         "co2_monthly_kg": co2_monthly_kg,
         "green_score": green_score,
         "performance_sub_score": performance_score,
-        "carbon_sub_score": carbon_score
+        "carbon_sub_score": carbon_score,
+        "saved_to_db": saved
     })
 
 if __name__ == '__main__':
