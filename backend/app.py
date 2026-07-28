@@ -10,6 +10,9 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)
 
+ENERGY_INTENSITY_KWH_PER_GB = 0.81
+GRID_CARBON_INTENSITY_G_PER_KWH = 442
+
 def get_db_connection():
     return mysql.connector.connect(
         host=os.getenv("DB_HOST"),
@@ -17,6 +20,20 @@ def get_db_connection():
         password=os.getenv("DB_PASSWORD"),
         database=os.getenv("DB_NAME")
     )
+
+def calculate_co2(total_bytes, monthly_visitors=10000):
+    gb_transferred = total_bytes / 1024 / 1024 / 1024
+    kwh_used = gb_transferred * ENERGY_INTENSITY_KWH_PER_GB
+    co2_per_visit_g = kwh_used * GRID_CARBON_INTENSITY_G_PER_KWH
+    co2_monthly_kg = (co2_per_visit_g * monthly_visitors) / 1000
+    return round(co2_per_visit_g, 4), round(co2_monthly_kg, 4)
+
+def calculate_green_score(total_bytes, co2_per_visit_g):
+    size_kb = total_bytes / 1024
+    performance_score = max(0, min(100, 100 - ((size_kb - 500) / (5000 - 500)) * 100)) if size_kb > 500 else 100
+    carbon_score = max(0, min(100, 100 - (co2_per_visit_g / 2) * 100)) if co2_per_visit_g <= 2 else 0
+    green_score = round((performance_score * 0.5) + (carbon_score * 0.5))
+    return green_score, round(performance_score), round(carbon_score)
 
 @app.route('/api/ping')
 def ping():
@@ -41,7 +58,13 @@ def analyze():
     api_key = os.getenv("PAGESPEED_API_KEY")
     psi_url = f"https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url={url}&key={api_key}"
 
-    response = requests.get(psi_url)
+    try:
+        response = requests.get(psi_url, timeout=60)
+    except requests.exceptions.Timeout:
+        return jsonify({"error": "PageSpeed analysis timed out. This page may be too large or slow to analyze. Try again or use a lighter page."}), 504
+    except requests.exceptions.RequestException as e:
+        return jsonify({"error": f"Request failed: {str(e)}"}), 500
+
     if response.status_code != 200:
         return jsonify({"error": "Failed to fetch PageSpeed data"}), 500
 
@@ -61,12 +84,20 @@ def analyze():
             "requestCount": item.get("requestCount", 0)
         }
 
+    co2_per_visit_g, co2_monthly_kg = calculate_co2(total_bytes)
+    green_score, performance_score, carbon_score = calculate_green_score(total_bytes, co2_per_visit_g)
+
     return jsonify({
         "url": url,
         "total_page_size_bytes": total_bytes,
         "load_time_ms": speed_index,
         "num_requests": num_requests,
-        "resource_breakdown": resources
+        "resource_breakdown": resources,
+        "co2_per_visit_g": co2_per_visit_g,
+        "co2_monthly_kg": co2_monthly_kg,
+        "green_score": green_score,
+        "performance_sub_score": performance_score,
+        "carbon_sub_score": carbon_score
     })
 
 if __name__ == '__main__':
