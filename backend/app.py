@@ -3,6 +3,8 @@ from flask_cors import CORS
 import mysql.connector
 import os
 import requests
+import joblib
+import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -12,6 +14,18 @@ CORS(app)
 
 ENERGY_INTENSITY_KWH_PER_GB = 0.81
 GRID_CARBON_INTENSITY_G_PER_KWH = 442
+
+# Load the trained bot detection model once at startup
+bot_model = joblib.load("bot_detection_model.pkl")
+
+FEATURE_COLUMNS = [
+    "request_count",
+    "avg_time_between_requests_sec",
+    "session_duration_sec",
+    "failed_login_attempts",
+    "user_agent_valid",
+    "unique_pages_visited"
+]
 
 def get_db_connection():
     return mysql.connector.connect(
@@ -46,10 +60,9 @@ def get_or_create_website(cursor, url):
 def save_scan(website_id, green_score, carbon_score):
     conn = get_db_connection()
     cursor = conn.cursor()
-    site_id = website_id
     cursor.execute(
         "INSERT INTO scan_history (website_id, green_score, carbon_score) VALUES (%s, %s, %s)",
-        (site_id, green_score, carbon_score)
+        (website_id, green_score, carbon_score)
     )
     conn.commit()
     cursor.close()
@@ -68,6 +81,26 @@ def db_check():
     cursor.close()
     conn.close()
     return jsonify({"status": "ok", "tables": tables})
+
+@app.route('/api/detect-bot', methods=['POST'])
+def detect_bot():
+    data = request.get_json()
+
+    missing = [col for col in FEATURE_COLUMNS if col not in data]
+    if missing:
+        return jsonify({"error": f"Missing fields: {missing}"}), 400
+
+    session_df = pd.DataFrame([data], columns=FEATURE_COLUMNS)
+    prediction = bot_model.predict(session_df)[0]
+    anomaly_score = bot_model.decision_function(session_df)[0]
+
+    is_bot = prediction == -1
+
+    return jsonify({
+        "is_bot": bool(is_bot),
+        "classification": "bot-like" if is_bot else "normal",
+        "anomaly_score": round(float(anomaly_score), 4)
+    })
 
 @app.route('/api/analyze')
 def analyze():
