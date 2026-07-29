@@ -15,7 +15,6 @@ CORS(app)
 ENERGY_INTENSITY_KWH_PER_GB = 0.81
 GRID_CARBON_INTENSITY_G_PER_KWH = 442
 
-# Load the trained bot detection model once at startup
 bot_model = joblib.load("bot_detection_model.pkl")
 
 FEATURE_COLUMNS = [
@@ -48,6 +47,42 @@ def calculate_green_score(total_bytes, co2_per_visit_g):
     carbon_score = max(0, min(100, 100 - (co2_per_visit_g / 2) * 100)) if co2_per_visit_g <= 2 else 0
     green_score = round((performance_score * 0.5) + (carbon_score * 0.5))
     return green_score, round(performance_score), round(carbon_score)
+
+def calculate_waste(total_sessions, bot_sessions, total_page_size_bytes, co2_per_visit_g):
+    if total_sessions == 0:
+        return 0, 0, 0
+    bot_traffic_pct = round((bot_sessions / total_sessions) * 100, 2)
+    wasted_bandwidth_bytes = round(total_page_size_bytes * (bot_traffic_pct / 100), 2)
+    wasted_co2_g = round(co2_per_visit_g * bot_sessions, 4)
+    return bot_traffic_pct, wasted_bandwidth_bytes, wasted_co2_g
+
+def simulate_impact(total_page_size_bytes, monthly_visitors, bot_traffic_pct):
+    # BEFORE: current state including bot traffic
+    before_co2_per_visit, before_co2_monthly = calculate_co2(total_page_size_bytes, monthly_visitors)
+    before_green_score, _, _ = calculate_green_score(total_page_size_bytes, before_co2_per_visit)
+
+    # AFTER: simulate removing bot traffic - effectively reduces monthly visitor load
+    # proportionally, since bot sessions no longer consume server resources
+    clean_visitors = round(monthly_visitors * (1 - bot_traffic_pct / 100))
+    after_co2_per_visit, after_co2_monthly = calculate_co2(total_page_size_bytes, clean_visitors)
+    after_green_score, _, _ = calculate_green_score(total_page_size_bytes, after_co2_per_visit)
+
+    co2_saved_monthly_kg = round(before_co2_monthly - after_co2_monthly, 4)
+
+    return {
+        "before": {
+            "monthly_visitors": monthly_visitors,
+            "co2_monthly_kg": before_co2_monthly,
+            "green_score": before_green_score
+        },
+        "after": {
+            "monthly_visitors": clean_visitors,
+            "co2_monthly_kg": after_co2_monthly,
+            "green_score": after_green_score
+        },
+        "co2_saved_monthly_kg": co2_saved_monthly_kg,
+        "green_score_improvement": after_green_score - before_green_score
+    }
 
 def get_or_create_website(cursor, url):
     cursor.execute("SELECT website_id FROM websites WHERE url = %s", (url,))
@@ -85,7 +120,6 @@ def db_check():
 @app.route('/api/detect-bot', methods=['POST'])
 def detect_bot():
     data = request.get_json()
-
     missing = [col for col in FEATURE_COLUMNS if col not in data]
     if missing:
         return jsonify({"error": f"Missing fields: {missing}"}), 400
@@ -93,7 +127,6 @@ def detect_bot():
     session_df = pd.DataFrame([data], columns=FEATURE_COLUMNS)
     prediction = bot_model.predict(session_df)[0]
     anomaly_score = bot_model.decision_function(session_df)[0]
-
     is_bot = prediction == -1
 
     return jsonify({
@@ -101,6 +134,42 @@ def detect_bot():
         "classification": "bot-like" if is_bot else "normal",
         "anomaly_score": round(float(anomaly_score), 4)
     })
+
+@app.route('/api/waste-estimate', methods=['POST'])
+def waste_estimate():
+    data = request.get_json()
+    required = ["total_sessions", "bot_sessions", "total_page_size_bytes", "co2_per_visit_g"]
+    missing = [f for f in required if f not in data]
+    if missing:
+        return jsonify({"error": f"Missing fields: {missing}"}), 400
+
+    bot_traffic_pct, wasted_bandwidth_bytes, wasted_co2_g = calculate_waste(
+        data["total_sessions"],
+        data["bot_sessions"],
+        data["total_page_size_bytes"],
+        data["co2_per_visit_g"]
+    )
+
+    return jsonify({
+        "bot_traffic_percent": bot_traffic_pct,
+        "wasted_bandwidth_bytes": wasted_bandwidth_bytes,
+        "wasted_co2_g": wasted_co2_g
+    })
+
+@app.route('/api/simulate-impact', methods=['POST'])
+def simulate_impact_route():
+    data = request.get_json()
+    required = ["total_page_size_bytes", "monthly_visitors", "bot_traffic_percent"]
+    missing = [f for f in required if f not in data]
+    if missing:
+        return jsonify({"error": f"Missing fields: {missing}"}), 400
+
+    result = simulate_impact(
+        data["total_page_size_bytes"],
+        data["monthly_visitors"],
+        data["bot_traffic_percent"]
+    )
+    return jsonify(result)
 
 @app.route('/api/analyze')
 def analyze():
