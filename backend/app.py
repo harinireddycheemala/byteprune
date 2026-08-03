@@ -6,6 +6,7 @@ import requests
 import joblib
 import pandas as pd
 from dotenv import load_dotenv
+from agentic_optimizer import run_agentic_loop
 
 load_dotenv()
 
@@ -57,12 +58,9 @@ def calculate_waste(total_sessions, bot_sessions, total_page_size_bytes, co2_per
     return bot_traffic_pct, wasted_bandwidth_bytes, wasted_co2_g
 
 def simulate_impact(total_page_size_bytes, monthly_visitors, bot_traffic_pct):
-    # BEFORE: current state including bot traffic
     before_co2_per_visit, before_co2_monthly = calculate_co2(total_page_size_bytes, monthly_visitors)
     before_green_score, _, _ = calculate_green_score(total_page_size_bytes, before_co2_per_visit)
 
-    # AFTER: simulate removing bot traffic - effectively reduces monthly visitor load
-    # proportionally, since bot sessions no longer consume server resources
     clean_visitors = round(monthly_visitors * (1 - bot_traffic_pct / 100))
     after_co2_per_visit, after_co2_monthly = calculate_co2(total_page_size_bytes, clean_visitors)
     after_green_score, _, _ = calculate_green_score(total_page_size_bytes, after_co2_per_visit)
@@ -168,6 +166,22 @@ def simulate_impact_route():
         data["total_page_size_bytes"],
         data["monthly_visitors"],
         data["bot_traffic_percent"]
+    )
+    return jsonify(result)
+
+@app.route('/api/optimize', methods=['POST'])
+def optimize():
+    data = request.get_json()
+    required = ["resource_breakdown", "total_page_size_bytes"]
+    missing = [f for f in required if f not in data]
+    if missing:
+        return jsonify({"error": f"Missing fields: {missing}"}), 400
+
+    monthly_visitors = data.get("monthly_visitors", 10000)
+    result = run_agentic_loop(
+        data["resource_breakdown"],
+        data["total_page_size_bytes"],
+        monthly_visitors
     )
     return jsonify(result)
 
