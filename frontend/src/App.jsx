@@ -4,7 +4,7 @@ import {
   Chart as ChartJS, ArcElement, BarElement, CategoryScale, LinearScale,
   PointElement, LineElement, Tooltip, Legend, Filler,
 } from 'chart.js';
-import { api, pick } from './apiUtils';
+import { api } from './apiUtils';
 
 ChartJS.register(ArcElement, BarElement, CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend, Filler);
 
@@ -154,8 +154,6 @@ export default function App() {
   if (raw) recs.push(['Enable caching', 'Long cache headers cut repeat-visit bytes.']);
   if (traffic?.bot_sessions > 0) recs.push(['Investigate flagged traffic', `${num(traffic.anomaly_percentage, 1)}% of sessions look anomalous.`]);
 
-  const steps = pick(opt, ['actions', 'action_log', 'log', 'steps', 'history', 'trail'], []);
-
   return (
     <div className="min-h-screen bg-[#f4f8f1] text-gray-800 flex flex-col">
       <header className="flex items-center justify-between px-6 py-3 bg-[#eef4ea] border-b border-[#dfe9dc]">
@@ -295,23 +293,40 @@ export default function App() {
                   {panelErr.opt && <p className="text-sm text-red-600">{panelErr.opt}</p>}
                   {!opt && !optBusy && <p className="text-sm text-gray-500">Click “Run Optimizer” to run the plan → act → observe → re-plan loop.</p>}
                   {optBusy && <p className="text-sm text-[#2e7d4f]">Agent is working…</p>}
-                  {opt && (
+                  {opt?.before && (
                     <>
-                      {Array.isArray(steps) && steps.length > 0 && (
-                        <ol className="space-y-2 max-h-64 overflow-auto text-sm mb-3">
-                          {steps.map((s, i) => (
-                            <li key={i} className="rounded-lg bg-[#f4f8f1] border border-[#dfe9dc] p-2">
-                              <span className="font-bold text-[#2e7d4f] mr-2">{i + 1}.</span>
-                              {typeof s === 'string' ? s : <span className="break-words">{JSON.stringify(s)}</span>}
-                            </li>
-                          ))}
-                        </ol>
-                      )}
-                      <details open={!(Array.isArray(steps) && steps.length > 0)}>
-                        <summary className="text-xs text-[#2e7d4f] cursor-pointer">Full optimizer response</summary>
-                        <pre className="text-xs bg-gray-50 p-2 rounded overflow-auto max-h-64 mt-2">{JSON.stringify(opt, null, 2)}</pre>
-                      </details>
-                      <p className="text-[11px] text-gray-400 mt-2">Optimization is simulated. No live website was modified.</p>
+                      <div className="grid grid-cols-3 gap-2 mb-3 text-center">
+                        <div className="rounded-lg bg-[#fbf6e6] p-2">
+                          <p className="text-xs text-gray-500">Green Score</p>
+                          <p className="font-bold text-lg">{opt.before.green_score} → {opt.after.green_score}</p>
+                          <p className="text-xs text-green-700">{opt.green_score_improvement >= 0 ? '+' : ''}{opt.green_score_improvement}</p>
+                        </div>
+                        <div className="rounded-lg bg-[#eef6ec] p-2">
+                          <p className="text-xs text-gray-500">Monthly CO₂ (kg)</p>
+                          <p className="font-bold text-lg">{num(opt.before.co2_monthly_kg, 2)} → {num(opt.after.co2_monthly_kg, 2)}</p>
+                          <p className="text-xs text-green-700">−{num(opt.co2_saved_monthly_kg, 2)} kg</p>
+                        </div>
+                        <div className="rounded-lg bg-[#eef5f8] p-2">
+                          <p className="text-xs text-gray-500">Page weight</p>
+                          <p className="font-bold text-sm mt-1">{fmtBytes(opt.before.total_bytes)} → {fmtBytes(opt.after.total_bytes)}</p>
+                        </div>
+                      </div>
+                      <ol className="space-y-2 max-h-64 overflow-auto text-sm">
+                        {(opt.action_log || []).map((s) => (
+                          <li key={s.step} className="rounded-lg bg-[#f4f8f1] border border-[#dfe9dc] p-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-semibold text-[#1d4d33]">Step {s.step}: {String(s.action).replace(/_/g, ' ')}</span>
+                              <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-800">{s.green_score_before} → {s.green_score_after}</span>
+                            </div>
+                            <p className="text-xs text-gray-600 mt-1">{s.description}</p>
+                            <p className="text-xs text-gray-500 mt-1">Estimated saving: {fmtBytes(s.bytes_saved)}</p>
+                          </li>
+                        ))}
+                        {(!opt.action_log || opt.action_log.length === 0) && (
+                          <li className="text-sm text-gray-500">No further optimizations were needed.</li>
+                        )}
+                      </ol>
+                      <p className="text-[11px] text-gray-400 mt-2">Simulated optimization using estimated reductions. No live website was modified.</p>
                     </>
                   )}
                 </Card>
