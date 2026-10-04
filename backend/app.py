@@ -249,7 +249,8 @@ def analyze():
         "carbon_sub_score": carbon_score,
         "saved_to_db": saved
     })
-    @app.route('/api/traffic-summary')
+
+@app.route('/api/traffic-summary')
 def traffic_summary():
     try:
         df = pd.read_csv("traffic_data.csv")
