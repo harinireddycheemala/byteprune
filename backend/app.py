@@ -249,6 +249,52 @@ def analyze():
         "carbon_sub_score": carbon_score,
         "saved_to_db": saved
     })
+    @app.route('/api/traffic-summary')
+def traffic_summary():
+    try:
+        df = pd.read_csv("traffic_data.csv")
+        preds = bot_model.predict(df[FEATURE_COLUMNS])
+        total = int(len(df))
+        flagged = int((preds == -1).sum())
+        return jsonify({
+            "total_sessions": total,
+            "bot_sessions": flagged,
+            "normal_sessions": total - flagged,
+            "anomaly_percentage": round(flagged / total * 100, 2) if total else 0
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/history')
+def history():
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(dictionary=True)
+        cur.execute(
+            "SELECT w.url AS url, sh.* FROM scan_history sh "
+            "JOIN websites w ON sh.website_id = w.website_id"
+        )
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        date_key = next((k for k in ("scan_date", "scanned_at", "created_at", "timestamp", "scan_time")
+                         if rows and k in rows[0]), None)
+        if date_key:
+            rows.sort(key=lambda r: r[date_key], reverse=True)
+        else:
+            rows.reverse()  # newest inserted first
+
+        out = [{
+            "url": r["url"],
+            "green_score": float(r["green_score"]) if r.get("green_score") is not None else None,
+            "carbon_score": float(r["carbon_score"]) if r.get("carbon_score") is not None else None,
+            "scan_date": str(r[date_key]) if date_key else ""
+        } for r in rows[:15]]
+        return jsonify({"history": out})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=5001)
